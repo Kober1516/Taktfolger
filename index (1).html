@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Taktfolger</title>
+<style>
+/* Bühnenpult: dunkle Bühne, Video oben, Pult darunter. Eine Optik (Konzertsaal dunkel). */
+:root{
+  --bg:#0e1013; --panel:#171a1f; --line:#272b33; --fg:#e9e6df; --muted:#9a978f;
+  --accent:#e0a84a; --ok:#6fbf73; --warn:#e0a84a; --bad:#d9675b;
+  --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 var(--font);
+  padding:env(safe-area-inset-top,0px) max(12px,env(safe-area-inset-right,0px)) env(safe-area-inset-bottom,0px) max(12px,env(safe-area-inset-left,0px))}
+main{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:12px;padding-block:12px}
+h1{font-size:18px;margin:0;letter-spacing:.02em}
+h1 small{color:var(--muted);font-weight:400;font-size:13px;margin-left:6px}
+.stage{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:16/9;max-width:100%}
+video{width:100%;height:100%;display:block;object-fit:contain;background:#000}
+.stage .empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);text-align:center;padding:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,label.btn{font:600 15px var(--font);color:var(--fg);background:#232730;border:1px solid var(--line);
+  border-radius:8px;padding:12px 14px;min-height:46px;cursor:pointer}
+button.go:not(:disabled){background:var(--ok);color:#0c1a0d;border-color:var(--ok);min-width:120px}
+button.primary,label.btn.primary{background:var(--accent);color:#1a1408;border-color:var(--accent)}
+button:disabled{opacity:.4}
+button:focus-visible,label.btn:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;font-variant-numeric:tabular-nums}
+.stat{background:#12151a;border-radius:8px;padding:8px 10px;min-width:0}
+.stat b{display:block;font-size:20px;font-weight:600}
+.stat span{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+@media (max-width:520px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.msg{color:var(--muted);font-size:13px;min-height:1.4em}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+canvas{width:100%;height:70px;display:block;background:#12151a;border-radius:8px}
+details{color:var(--muted);font-size:13px}
+details p{margin:.4em 0}
+.toggle{display:flex;align-items:center;gap:8px;font-size:14px}
+.toggle input{width:22px;height:22px}
+.black{position:absolute;inset:0;background:#000;opacity:0;transition:opacity 2.5s ease;pointer-events:none}
+.black.on{opacity:1}
+.stage.fs{position:fixed;inset:0;z-index:50;border-radius:0;aspect-ratio:auto}
+.stage .exitfs{position:absolute;right:8px;top:8px;opacity:.25;display:none}
+.stage.fs .exitfs{display:block}
+</style>
+</head>
+<body>
+<main>
+  <h1>Taktfolger <small>Video folgt dem Orchester · Testversion</small></h1>
+
+  <div class="stage" id="stage">
+    <video id="vid" playsinline muted preload="auto"></video>
+    <div class="empty" id="empty">Wähle unten das Video aus. Der Ton im Video dient als Vorlage.</div>
+    <div class="black" id="black"></div>
+    <button class="exitfs" id="exitfs">✕</button>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label class="btn primary" id="pickLbl">1 · Video wählen<input type="file" id="file" accept="video/*,audio/*"></label>
+      <button id="micBtn" disabled>2 · Mikro starten</button>
+      <button id="restart" class="go" disabled>▶ Start</button>
+      <button id="stop" disabled>■ Stopp</button>
+      <button id="search" disabled>Neu suchen</button>
+      <button id="fsBtn" disabled>Vollbild</button>
+    </div>
+    <div class="row">
+      <label class="toggle"><input type="checkbox" id="auto" checked> Automatik (Video folgt dem Tempo)</label>
+    </div>
+    <div class="msg" id="msg">Noch kein Video geladen.</div>
+    <div class="stats">
+      <div class="stat"><span>Stelle im Stück</span><b id="sPos">–</b></div>
+      <div class="stat"><span>Tempo</span><b id="sTempo">–</b></div>
+      <div class="stat"><span>Video-Abstand</span><b id="sLag">–</b></div>
+      <div class="stat"><span>Sicherheit</span><b id="sConf"><i class="dot"></i>–</b></div>
+    </div>
+    <canvas id="lvl" width="800" height="70" aria-label="Mikrofonpegel und Erkennung"></canvas>
+    <details>
+      <summary>So testest du</summary>
+      <p>1. Video wählen, warten bis „Vorlage bereit“ steht. 2. „Mikro starten“ – das Bild bleibt schwarz, nichts läuft los. 3. Kurz vor dem Einsatz „▶ Start“ tippen: Die App wartet jetzt auf den ersten Ton und startet das Video dann von vorne.</p>
+      <p>Hört ihr auf zu spielen, wird das Bild nach ein paar Sekunden schwarz (am Schluss des Stücks schon nach ca. 1,5 s). Danach reagiert die App nicht mehr auf Applaus – für den nächsten Durchlauf wieder „▶ Start“. „■ Stopp“ macht sofort schwarz.</p>
+      <p>Mit einem Presenter-Klicker oder einer Tastatur: Leertaste / Enter / Pfeil rechts = Start, Esc = Stopp.</p>
+      <p>„Neu suchen“: App sucht die Stelle im ganzen Stück neu (falls sie sich verlaufen hat).</p>
+      <p>Handy nah an die Musiker legen, nicht in die Hosentasche. Bildschirm bleibt an, solange die App läuft.</p>
+    </details>
+  </div>
+</main>
+
+<script>
+(() => {
+"use strict";
+// ---------- Parameter ----------
+const HOP = 0.1;            // Sekunden pro Merkmal-Frame
+const REF_SR = 22050;       // Referenz wird auf diese Rate gebracht
+const REF_N = 4096;         // FFT-Fenster Referenz (~186 ms)
+const LIVE_FFT = 8192;      // Analyser-FFT live (~170 ms bei 48 kHz)
+const WIN = 60;             // Live-Fenster in Frames (6 s)
+const MIN_WIN = 15;         // Mindestens 1,5 s hören bevor erkannt wird
+const FMIN = 70, FMAX = 4200;
+const LATENCY = 0.15;       // Ausgleich Fenster-/Verarbeitungsverzögerung (s)
+
+const $ = id => document.getElementById(id);
+const vid = $("vid"), msg = $("msg");
+let ref = null;             // Array<Float32Array(12)> Referenz-Chroma
+let refEnergy = null;
+let audioCtx = null, analyser = null, freqBuf = null, timer = null;
+let live = [];              // letzte Live-Frames {c, e, t}
+let pos = -1;               // geschätzte Referenz-Frame-Position
+let hist = [];              // [{t, p}] für Tempo
+let tempo = 1, conf = 0, lastGlobal = 0, globalVotes = 0, silentSince = 0;
+let started = false, wakeLock = null, dark = false, darkTimer = null;
+// Ablauf: "aus" (Mikro aus) -> "bereit" (hört, Bild schwarz, wartet auf Start) -> "wartet" (Start gedrückt, wartet auf ersten Ton)
+//         -> "läuft" (Video folgt) -> "ende" (schwarz, ignoriert Applaus) -> mit Start wieder "wartet"
+let mode = "aus", onsetCount = 0, musicEnd = 0;
+const END_SILENCE = 1.5, PAUSE_SILENCE = 6; // Sekunden Stille bis schwarz (am Schluss / mitten im Stück)
+function fadeOut(msgText){ if (!dark){ dark = true; $("black").classList.add("on");
+  clearTimeout(darkTimer); darkTimer = setTimeout(() => { if (dark) vid.pause(); }, 2600); }
+  if (msgText) say(msgText); }
+function fadeIn(){ if (!dark) return; dark = false; clearTimeout(darkTimer); $("black").classList.remove("on"); }
+function blackNow(){ dark = true; clearTimeout(darkTimer); const b=$("black"); b.style.transition="none"; b.classList.add("on"); void b.offsetWidth; b.style.transition=""; vid.pause(); }
+function endPiece(text){ mode = "ende"; fadeOut(text || "Stück zu Ende – Bild schwarz. Für den nächsten Durchlauf ▶ Start."); $("stop").disabled = true; }
+function armStart(){
+  if (!analyser) return;
+  blackNow(); pos = 0; hist = []; tempo = 1; conf = 0; started = false; onsetCount = 0; live = [];
+  vid.playbackRate = 1; vid.currentTime = 0;
+  mode = "wartet"; $("stop").disabled = false;
+  say("Wartet auf den Einsatz … Das Video startet beim ersten Ton.");
+}
+
+const say = t => { msg.textContent = t; };
+const fmt = s => { if (!(s >= 0)) return "–"; const m = Math.floor(s/60), x = Math.floor(s%60); return m + ":" + String(x).padStart(2,"0"); };
+
+// ---------- FFT ----------
+function fftMag(re, im){ // in-place radix-2
+  const n = re.length;
+  for (let i=1,j=0;i<n;i++){ let bit=n>>1; for(;j&bit;bit>>=1) j^=bit; j^=bit; if(i<j){ let t=re[i];re[i]=re[j];re[j]=t; t=im[i];im[i]=im[j];im[j]=t; } }
+  for (let len=2;len<=n;len<<=1){
+    const ang=-2*Math.PI/len, wr=Math.cos(ang), wi=Math.sin(ang), half=len>>1;
+    for (let i=0;i<n;i+=len){ let cr=1,ci=0;
+      for (let k=0;k<half;k++){ const a=i+k,b=a+half;
+        const tr=re[b]*cr-im[b]*ci, ti=re[b]*ci+im[b]*cr;
+        re[b]=re[a]-tr; im[b]=im[a]-ti; re[a]+=tr; im[a]+=ti;
+        const ncr=cr*wr-ci*wi; ci=cr*wi+ci*wr; cr=ncr; } } }
+}
+// Bin -> Tonklasse Tabelle
+function binMap(n, sr){
+  const map = new Int8Array(n/2).fill(-1);
+  for (let k=1;k<n/2;k++){ const f=k*sr/n; if(f<FMIN||f>FMAX) continue;
+    const midi = 69 + 12*Math.log2(f/440); map[k] = ((Math.round(midi)%12)+12)%12; }
+  return map;
+}
+function chromaFromMag(mag, map){
+  const c = new Float32Array(12); let e = 0;
+  for (let k=1;k<map.length;k++){ const p=map[k]; if(p<0) continue; const m=mag[k]; c[p]+=m*m; e+=m*m; }
+  let norm=0; for(let i=0;i<12;i++){ c[i]=Math.sqrt(Math.sqrt(c[i])); norm+=c[i]*c[i]; }
+  norm=Math.sqrt(norm)||1; for(let i=0;i<12;i++) c[i]/=norm;
+  return {c, e};
+}
+const dist = (a,b) => { let s=0; for(let i=0;i<12;i++) s+=a[i]*b[i]; return 1-s; };
+
+// ---------- Referenz aus dem Video-Ton ----------
+async function buildRef(file){
+  say("Lese Ton aus dem Video …");
+  const buf = await file.arrayBuffer();
+  const tmp = new OfflineAudioContext(1, REF_SR, REF_SR);
+  const audio = await tmp.decodeAudioData(buf);
+  // auf Mono REF_SR bringen
+  const len = Math.ceil(audio.duration*REF_SR);
+  const off = new OfflineAudioContext(1, len, REF_SR);
+  const src = off.createBufferSource(); src.buffer = audio; src.connect(off.destination); src.start();
+  const mono = (await off.startRendering()).getChannelData(0);
+  const hop = Math.round(HOP*REF_SR), map = binMap(REF_N, REF_SR);
+  const win = new Float32Array(REF_N); for(let i=0;i<REF_N;i++) win[i]=0.5-0.5*Math.cos(2*Math.PI*i/(REF_N-1));
+  const re = new Float64Array(REF_N), im = new Float64Array(REF_N), mag = new Float32Array(REF_N/2);
+  const frames = [], energy = [];
+  const total = Math.floor((mono.length)/hop);
+  for (let f=0; f<total; f++){
+    const start = f*hop - REF_N/2;
+    for (let i=0;i<REF_N;i++){ const s=start+i; re[i]=(s>=0&&s<mono.length?mono[s]:0)*win[i]; im[i]=0; }
+    fftMag(re, im);
+    for (let k=0;k<REF_N/2;k++) mag[k]=Math.hypot(re[k],im[k]);
+    const {c,e} = chromaFromMag(mag, map); frames.push(c); energy.push(e);
+    if (f % 200 === 0){ say("Analysiere Vorlage … " + Math.round(100*f/total) + " %"); await new Promise(r=>setTimeout(r,0)); }
+  }
+  const sorted = energy.slice().sort((a,b)=>a-b);
+  const med = sorted[Math.floor(sorted.length/2)] || 1;
+  refEnergy = energy.map(e => e/med);
+  return frames;
+}
+
+// ---------- Abgleich (Subsequenz-DTW) ----------
+// liefert {end, cost} für Live-Fenster gegen Referenz [a,b]
+function align(a, b){
+  const L = live.length, M = b-a+1; if (M<2 || L<2) return null;
+  let prev = new Float32Array(M), cur = new Float32Array(M);
+  let plen = new Float32Array(M), clen = new Float32Array(M);
+  const P = 0.08; // Strafe für Nicht-Diagonal-Schritte
+  for (let j=0;j<M;j++){ prev[j] = dist(live[0].c, ref[a+j]); plen[j]=1; }
+  for (let i=1;i<L;i++){
+    const li = live[i].c;
+    for (let j=0;j<M;j++){
+      const d = dist(li, ref[a+j]);
+      let best = prev[j] + d + P, bl = plen[j]+1;                        // Live schneller (Ref bleibt)
+      if (j>0){ const v = prev[j-1] + d; if (v<best){best=v; bl=plen[j-1]+1;} // diagonal
+                const w = cur[j-1] + d + P; if (w<best){best=w; bl=clen[j-1]+1;} } // Ref schneller
+      cur[j]=best; clen[j]=bl;
+    }
+    let t=prev; prev=cur; cur=t; t=plen; plen=clen; clen=t;
+  }
+  let bj=-1, bc=1e9;
+  for (let j=0;j<M;j++){ const c = prev[j]/plen[j]; if (c<bc){bc=c;bj=j;} }
+  return {end:a+bj, cost:bc};
+}
+
+function update(){
+  analyser.getFloatFrequencyData(freqBuf);
+  const mag = new Float32Array(freqBuf.length);
+  for (let k=0;k<freqBuf.length;k++) mag[k] = Math.pow(10, freqBuf[k]/20);
+  const {c, e} = chromaFromMag(mag, liveMap);
+  const now = performance.now()/1000;
+  const db = 10*Math.log10(e+1e-12);
+  const loud = db > noiseFloor + 8;
+  if (!loud){ noiseFloor = Math.max(-90, Math.min(noiseFloor*0.98 + db*0.02, db)); } // Rauschpegel lernen
+  live.push({c, e, t: now, loud}); if (live.length > WIN) live.shift();
+  drawLevel(db, loud);
+
+  const loudCount = live.reduce((n,f)=>n+(f.loud?1:0),0);
+  if (!loud){ if(!silentSince) silentSince = now; } else silentSince = 0;
+
+  if (mode === "bereit" || mode === "ende" || mode === "aus"){ showStats(); return; }
+  if (mode === "wartet"){
+    onsetCount = loud ? onsetCount + 1 : 0;
+    if (onsetCount >= 2){ // Einsatz erkannt: Video von vorne
+      mode = "läuft"; started = true; pos = 0; hist = []; live = live.slice(-2);
+      vid.currentTime = 0; vid.playbackRate = 1; vid.play().catch(()=>{}); fadeIn();
+      say("Läuft – Video folgt eurem Tempo.");
+    }
+    showStats(); return;
+  }
+
+  if (live.length >= MIN_WIN && loudCount > live.length*0.5){
+    let res = null;
+    if (pos < 0){ res = align(0, ref.length-1); if (res && res.cost < 0.32){ pos = res.end; hist=[]; } }
+    else {
+      const a = Math.max(0, Math.floor(pos - live.length*1.7 - 10)), b = Math.min(ref.length-1, pos + 20);
+      res = align(a, b);
+      // ab und zu im ganzen Stück nachsehen, ob wir uns verlaufen haben
+      if (now - lastGlobal > 2){ lastGlobal = now;
+        const g = align(0, ref.length-1);
+        if (g && res && Math.abs(g.end - res.end) > 40 && g.cost < res.cost - 0.04){ if (++globalVotes >= 2){ res = g; globalVotes = 0; } }
+        else globalVotes = 0;
+      }
+      if (res && res.cost < 0.45){ pos = res.end; }
+    }
+    if (res){ conf = Math.max(0, Math.min(1, (0.45 - res.cost)/0.25)); }
+    if (pos >= 0){
+      hist.push({t: now, p: pos}); while (hist.length && now - hist[0].t > 10) hist.shift();
+      if (hist.length > 25){ // lineare Regression -> Tempo
+        let st=0,sp=0,stt=0,stp=0,n=hist.length; const t0=hist[0].t;
+        for(const h of hist){ const t=h.t-t0; st+=t; sp+=h.p; stt+=t*t; stp+=t*h.p; }
+        const slope = (n*stp-st*sp)/((n*stt-st*st)||1); // Frames pro Sekunde
+        const r = Math.max(0.7, Math.min(1.35, slope*HOP));
+        tempo = tempo*0.93 + r*0.07;
+      }
+    }
+  } else if (pos >= 0 && silentSince && now - silentSince > 1.5){ conf *= 0.9; }
+
+  steerVideo(now);
+  showStats();
+}
+
+function steerVideo(now){
+  if (pos < 0 || !vid.duration) return;
+  const target = Math.min(vid.duration-0.05, pos*HOP + LATENCY);
+  const silentFor = silentSince ? now - silentSince : 0;
+  const nearEnd = pos*HOP >= musicEnd - 15; // letzte 15 s Musik im Stück
+  if (mode !== "läuft") return;
+  if (nearEnd && (silentFor > END_SILENCE || vid.currentTime >= musicEnd + 0.5)) { endPiece(); return; }
+  if (silentFor > PAUSE_SILENCE) { fadeOut("Pause erkannt – Bild schwarz. Spielt ihr weiter, kommt es von selbst zurück."); return; }
+  if (dark){ if (!silentSince && conf > 0.3) { fadeIn(); say("Läuft – Video folgt eurem Tempo."); } else return; }
+  if (!$("auto").checked){ if (vid.paused && started) vid.play().catch(()=>{}); vid.playbackRate = 1; return; }
+  if (!started){ started = true; vid.currentTime = target; vid.play().catch(()=>{}); return; }
+  const err = target - vid.currentTime;
+  if (Math.abs(err) > 2.5 && conf > 0.3){ vid.currentTime = target; return; }
+  let rate = tempo + Math.max(-0.12, Math.min(0.12, err*0.25));
+  if (silentSince && now - silentSince > 1.5) rate = Math.min(rate, 0.6); // Pause/Fermate: langsam weiter
+  rate = Math.max(0.5, Math.min(1.5, rate));
+  vid.playbackRate = vid.playbackRate*0.8 + rate*0.2;
+  if (vid.paused && !vid.ended) vid.play().catch(()=>{});
+}
+
+function showStats(){
+  $("sPos").textContent = pos>=0 ? fmt(pos*HOP) : "sucht …";
+  $("sTempo").textContent = pos>=0 ? Math.round(tempo*100) + " %" : "–";
+  $("sLag").textContent = (pos>=0 && started) ? ((pos*HOP+LATENCY - vid.currentTime)>=0?"+":"") + (pos*HOP+LATENCY - vid.currentTime).toFixed(1) + " s" : "–";
+  const cls = conf>0.55?"ok":conf>0.25?"warn":"bad";
+  $("sConf").innerHTML = '<i class="dot '+cls+'"></i>' + (conf>0.55?"gut":conf>0.25?"mittel":"gering");
+  window.__tf = {mode, dark, pos, tempo, conf, video: vid.currentTime, rate: vid.playbackRate, started};
+}
+
+// Pegelanzeige
+const cv = $("lvl"), g = cv.getContext("2d"); const lv = [];
+function drawLevel(db, loud){
+  lv.push({db, loud}); if (lv.length>160) lv.shift();
+  g.clearRect(0,0,cv.width,cv.height); const w = cv.width/160;
+  lv.forEach((p,i)=>{ const h = Math.max(2, Math.min(cv.height, (p.db+100)/100*cv.height));
+    g.fillStyle = p.loud ? "#e0a84a" : "#3a3f49"; g.fillRect(i*w, cv.height-h, w-1, h); });
+}
+
+// ---------- Mikro ----------
+let liveMap = null, noiseFloor = -60;
+async function startMic(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser(); analyser.fftSize = LIVE_FFT; analyser.smoothingTimeConstant = 0;
+    src.connect(analyser);
+    freqBuf = new Float32Array(analyser.frequencyBinCount);
+    liveMap = binMap(LIVE_FFT, audioCtx.sampleRate);
+    timer = setInterval(update, HOP*1000);
+    $("micBtn").textContent = "Mikro läuft"; $("micBtn").disabled = true;
+    $("restart").disabled = false; $("search").disabled = false;
+    mode = "bereit"; blackNow(); vid.currentTime = 0;
+    say("Mikro läuft, Bild ist schwarz. Kurz vor dem Einsatz ▶ Start tippen.");
+    try { wakeLock = await navigator.wakeLock?.request("screen"); } catch(e){}
+  } catch(e){
+    say("Kein Zugriff aufs Mikrofon: " + (e.message||e) + ". In den Browser-Einstellungen das Mikro für diese Seite erlauben.");
+  }
+}
+
+// ---------- Bedienung ----------
+$("file").addEventListener("change", async ev => {
+  const f = ev.target.files[0]; if (!f) return;
+  vid.src = URL.createObjectURL(f); $("empty").hidden = true;
+  try { ref = await buildRef(f);
+    { let last = 0; for (let i=0;i<refEnergy.length;i++) if (refEnergy[i] > 0.05) last = i; musicEnd = (last+1)*HOP; }
+    say("Vorlage bereit (" + fmt(ref.length*HOP) + "). Jetzt Mikro starten.");
+    $("micBtn").disabled = false; $("fsBtn").disabled = false;
+  } catch(e){ say("Konnte den Ton nicht lesen: " + (e.message||e)); }
+});
+$("micBtn").addEventListener("click", startMic);
+vid.addEventListener("ended", () => { if (mode === "läuft") endPiece(); });
+$("restart").addEventListener("click", armStart);
+$("stop").addEventListener("click", () => endPiece("Gestoppt – Bild schwarz. Für den nächsten Durchlauf ▶ Start."));
+$("search").addEventListener("click", () => { if (!analyser) return; mode = "läuft"; pos = -1; hist = []; started = false; fadeIn(); vid.pause(); say("Suche die Stelle im ganzen Stück …"); });
+document.addEventListener("keydown", e => { // Presenter-Klicker / Tastatur
+  if (e.target.tagName === "INPUT") return;
+  if ([" ","Enter","ArrowRight","PageDown"].includes(e.key)){ e.preventDefault(); if (mode !== "läuft") armStart(); }
+  else if (["Escape","ArrowLeft","PageUp","b","."].includes(e.key)){ e.preventDefault(); if (mode === "läuft" || mode === "wartet") endPiece("Gestoppt – Bild schwarz. Für den nächsten Durchlauf ▶ Start."); }
+});
+$("auto").addEventListener("change", () => { if (!$("auto").checked) vid.playbackRate = 1; });
+$("fsBtn").addEventListener("click", async () => {
+  const st = $("stage");
+  try { await st.requestFullscreen(); } catch(e){ st.classList.add("fs"); }
+});
+$("exitfs").addEventListener("click", () => { $("stage").classList.remove("fs"); if (document.fullscreenElement) document.exitFullscreen(); });
+document.addEventListener("visibilitychange", async () => { if (document.visibilityState==="visible" && timer){ try{ wakeLock = await navigator.wakeLock?.request("screen"); }catch(e){} } });
+})();
+</script>
+</body>
+</html>
